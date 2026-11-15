@@ -84,6 +84,10 @@ pub struct Script {
 /// The section a line belongs to.
 enum Section {
     None,
+    /// A section of a kind a recovery reads nothing of: init takes the
+    /// lines that follow for commands of it and runs none, which is what
+    /// becomes of a script's own C-style comment headers too.
+    Other,
     Program,
     Action,
 }
@@ -117,7 +121,10 @@ pub fn read(text: &str) -> Result<Script> {
                     option(program, &words).with_context(|| format!("line {number}, of the service {}", program.name))?;
                 }
                 Section::Action => script.actions.last_mut().expect("an on section has begun").commands.push(words),
-                Section::None => bail!("line {number}: {first} begins no section, and no section has begun"),
+                // A section of a kind nothing here reads: init runs none of
+                // what it holds, which is how the C-style comment headers
+                // and marked-out lines of OnePlus's own scripts pass.
+                Section::None | Section::Other => section = Section::Other,
             },
         }
     }
@@ -395,10 +402,36 @@ mod tests {
     }
 
     #[test]
-    fn a_line_outside_any_section_is_refused() {
-        assert!(read("user system\n").is_err());
+    fn what_a_section_nothing_reads_holds_is_passed_over() {
+        let script = read(
+            "/***************************************************************\n\
+             ** File: - occe_create\n\
+             ** Description:\n\
+             ***************************************************************/\n\
+             service occe_create /odm/bin/occe_create\n\
+             \x20   class main\n\
+             \x20   user root\n",
+        )
+        .unwrap();
+        assert_eq!(script.programs.len(), 1, "the header is a section nothing reads, and the service after it is read");
+        assert_eq!(script.programs[0].name, "occe_create");
+        assert_eq!(script.programs[0].user.as_deref(), Some("root"));
+        let marked_out = read(
+            "//move to odm to control project\n\
+             //service vendor.contexthub-default /vendor/bin/hw/android.hardware.contexthub-service.qmi\n\
+             service vendor.keymint-qti /vendor/bin/hw/android.hardware.security.keymint-service-qti\n\
+             \x20   user system\n",
+        )
+        .unwrap();
+        assert_eq!(marked_out.programs.len(), 1, "the marked-out service is not read");
+        assert_eq!(marked_out.programs[0].name, "vendor.keymint-qti");
+    }
+
+    #[test]
+    fn a_line_of_a_section_that_is_read_outside_one_is_refused() {
         assert!(read("service a\n").is_err(), "a service without its program");
         assert!(read("service a /a\n    user\n").is_err(), "a user line that names none");
         assert!(read("service a /a\n    setenv \"A\n").is_err(), "a quote left open");
+        assert_eq!(read("user system\n").unwrap(), Script::default(), "a section of a kind nothing here reads, which init runs nothing of");
     }
 }

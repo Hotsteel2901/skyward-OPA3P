@@ -103,6 +103,7 @@ not been verified.
 
 | Device | Codename | Built on |
 | --- | --- | --- |
+| 🚧 OnePlus Ace 3 Pro | `corvette` | PJX110_16.0.5.1301(CN01) (Android 16) |
 | 🚧 Xiaomi 13 | `fuxi` | OS3.0.309.0.WMCCNXM (Android 16) |
 | 🚧 Xiaomi 13 Pro | `nuwa` | OS3.0.312.0.WMBCNXM (Android 16) |
 | 🚧 Xiaomi 14 | `houji` | OS3.0.307.0.WNCCNXM (Android 16) |

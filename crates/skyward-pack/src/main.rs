@@ -1,7 +1,7 @@
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use sha2::{Digest, Sha256};
-use skyward_config::ramdisk as paths;
+use skyward_config::{ramdisk as paths, StockSource};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -183,13 +183,46 @@ fn main() -> Result<()> {
         Cmd::Described { config, partitions, out } => {
             let stock = skyward_config::DeviceConfig::load(&config)?.stock.with_context(|| format!("{} names no stock build", config.display()))?;
             let partitions = if partitions.is_empty() { skyward_programs::phone::PARTITIONS.map(str::to_string).to_vec() } else { partitions };
-            described::take(&stock.package, &partitions, &out)
+            described::take(&package(&stock)?, &partitions, &out)
         }
     }
 }
 
 /// The partition a recovery is made on, as a full update package names it.
 const RECOVERY: &str = "recovery";
+
+/// Where the stock build's full update package is now: the address the
+/// configuration names, or the one the maker's update service sends it
+/// from. OPPO's service answers only the phone's own updater, and only for
+/// a while, so it is asked as that updater asks, and its answer is used at
+/// once.
+fn package(stock: &skyward_config::Stock) -> Result<String> {
+    match stock.source {
+        StockSource::Xiaomi => Ok(stock.package.clone()),
+        StockSource::Oplus => {
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .max_redirects(0)
+                .build()
+                .into();
+            let mut response = agent
+                .get(&stock.package)
+                .header("userId", "oplus-ota|16002018")
+                .header("User-Agent", "okhttp/3.12.12")
+                .header("Accept", "*/*")
+                .call()
+                .with_context(|| format!("ask {}", stock.package))?;
+            let status = response.status();
+            if status.is_redirection() {
+                let location = response.headers().get(ureq::http::header::LOCATION).with_context(|| format!("{} answered {status}, and names no address", stock.package))?;
+                return Ok(location.to_str().context("OPPO's update service names an address that is not text")?.to_string());
+            }
+            let body = response.body_mut().read_to_string().context("read the answer of OPPO's update service")?;
+            ensure!(status.is_success(), "OPPO's update service answered {status}: {body}");
+            anyhow::bail!("OPPO's update service sends the package itself in its answer, at no address of its own: {body}")
+        }
+    }
+}
 
 /// Take the recovery partition out of the stock build's full update package
 /// on its server, reading only what that partition takes of it, and write it
@@ -199,7 +232,8 @@ fn take_stock_recovery(stock: &skyward_config::Stock, out: &Path) -> Result<()> 
     std::fs::create_dir_all(parent).with_context(|| format!("make {}", parent.display()))?;
     // Taken out beside where it goes, so it is moved there whole.
     let work = tempfile::Builder::new().prefix(".stock").tempdir_in(parent).with_context(|| format!("make a folder in {}", parent.display()))?;
-    let payload = unpayload::Payload::open_url(&stock.package).with_context(|| format!("open {}", stock.package))?;
+    let package = package(stock)?;
+    let payload = unpayload::Payload::open_url(&package).with_context(|| format!("open {package}"))?;
     let options = unpayload::ExtractOptions { output_dir: work.path().to_path_buf(), partitions: vec![RECOVERY.into()], ..Default::default() };
     let report = |event: unpayload::Event<'_>| match event {
         unpayload::Event::Started { partitions } => {
@@ -210,10 +244,10 @@ fn take_stock_recovery(stock: &skyward_config::Stock, out: &Path) -> Result<()> 
         unpayload::Event::Extracted(image) => println!("took {} out: {} bytes", image.partition, image.size),
         unpayload::Event::Progress { .. } => {}
     };
-    let taken = payload.extract(&options, &report).with_context(|| format!("take {RECOVERY} out of {}", stock.package))?;
-    let image = taken.iter().find(|i| i.partition == RECOVERY).with_context(|| format!("{} holds no {RECOVERY} partition", stock.package))?;
+    let taken = payload.extract(&options, &report).with_context(|| format!("take {RECOVERY} out of {package}"))?;
+    let image = taken.iter().find(|i| i.partition == RECOVERY).with_context(|| format!("{package} holds no {RECOVERY} partition"))?;
     let sum = hex::encode(image.sha256.as_deref().context("the package's own sum of the image was not checked")?);
-    ensure!(sum == stock.recovery, "the {RECOVERY} partition in {} has the SHA-256 {sum}, where the configuration names {}", stock.package, stock.recovery);
+    ensure!(sum == stock.recovery, "the {RECOVERY} partition in {package} has the SHA-256 {sum}, where the configuration names {}", stock.recovery);
     std::fs::rename(&image.path, out).with_context(|| format!("move {} to {}", image.path.display(), out.display()))?;
     println!("wrote {} ({} bytes), its SHA-256 the one the configuration names", out.display(), image.size);
     Ok(())

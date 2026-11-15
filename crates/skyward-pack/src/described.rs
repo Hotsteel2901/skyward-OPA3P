@@ -117,7 +117,7 @@ fn take_path(filesystem: &Filesystem, path: &str, to: &Path) -> Result<usize> {
         Err(fs_erofs::Error::NotFound) => return Ok(0),
         Err(e) => return Err(e).context("look for it"),
     };
-    copy(filesystem, &inode, &to.join(path))
+    copy(filesystem, &inode, path, &to.join(path))
 }
 
 /// The files the scripts taken name, each once, as the scripts name them.
@@ -164,11 +164,12 @@ impl Named {
     }
 }
 
-/// Write what `inode` holds at `to`, a file or a folder with all in it,
-/// and give how many files that was. The folders taken hold files and
-/// folders alone; anything else in one is refused, as nothing here would
-/// read it.
-fn copy(filesystem: &Filesystem, inode: &Inode, to: &Path) -> Result<usize> {
+/// Write what `inode`, the file or folder `from` of `filesystem`, holds at
+/// `to`, and give how many files that was. The folders taken hold files and
+/// folders alone; a link is taken as what it leads to where that is on the
+/// same partition, and one that leads off it is passed over, as a recovery
+/// reads neither.
+fn copy(filesystem: &Filesystem, inode: &Inode, from: &str, to: &Path) -> Result<usize> {
     match inode.file_type() {
         FileType::RegularFile => {
             let size = usize::try_from(inode.size).context("a file too large to hold")?;
@@ -179,6 +180,12 @@ fn copy(filesystem: &Filesystem, inode: &Inode, to: &Path) -> Result<usize> {
             fs::write(to, data).with_context(|| format!("write {}", to.display()))?;
             Ok(1)
         }
+        FileType::Symlink => match filesystem.resolve_path(from, true) {
+            Ok(target) if target.file_type() != FileType::Symlink => copy(filesystem, &target, from, to),
+            Ok(_) => Ok(0),
+            Err(fs_erofs::Error::NotFound | fs_erofs::Error::NotADirectory) => Ok(0),
+            Err(e) => Err(e).with_context(|| format!("follow {from}")),
+        },
         FileType::Dir => {
             fs::create_dir_all(to).with_context(|| format!("make {}", to.display()))?;
             let mut written = 0;
@@ -188,7 +195,8 @@ fn copy(filesystem: &Filesystem, inode: &Inode, to: &Path) -> Result<usize> {
                 }
                 let name = std::str::from_utf8(&entry.name).with_context(|| format!("a name that is not text: {:?}", String::from_utf8_lossy(&entry.name)))?;
                 let child = filesystem.read_inode(entry.nid).with_context(|| format!("read {name}"))?;
-                written += copy(filesystem, &child, &to.join(name)).with_context(|| format!("in {name}"))?;
+                let child_from = format!("{}/{}", from.trim_end_matches('/'), name);
+                written += copy(filesystem, &child, &child_from, &to.join(name)).with_context(|| format!("in {name}"))?;
             }
             Ok(written)
         }

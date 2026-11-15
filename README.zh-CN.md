@@ -94,6 +94,7 @@ Skyward 是使用 Rust 编写的 recovery，从零开始编写。
 
 | 机型 | 代号 | 构建所用的系统版本 |
 | --- | --- | --- |
+| 🚧 一加 Ace 3 Pro | `corvette` | PJX110_16.0.5.1301(CN01)（Android 16） |
 | 🚧 小米 13 | `fuxi` | OS3.0.309.0.WMCCNXM（Android 16） |
 | 🚧 小米 13 Pro | `nuwa` | OS3.0.312.0.WMBCNXM（Android 16） |
 | 🚧 小米 14 | `houji` | OS3.0.307.0.WNCCNXM（Android 16） |

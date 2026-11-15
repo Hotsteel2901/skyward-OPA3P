@@ -26,6 +26,10 @@ tempfile = "3.27.0"
 # server, reading only what that partition takes, and reads the other
 # partitions where they lie in it.
 unpayload = { version = "0.1.2", default-features = false, features = ["http"] }
+# Asks OPPO and OnePlus's update service where a stock package is, as the
+# phone's own updater asks it: the address it names answers only the
+# updater, and only for a while.
+ureq = { version = "=3.5.0", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 serde_json = "1.0.145"

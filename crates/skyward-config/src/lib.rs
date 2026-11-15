@@ -91,12 +91,31 @@ pub struct DeviceConfig {
 /// of, and that partition as it should come out of the package.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Stock {
+    /// The update service the package is asked of, where `package` is not
+    /// the package itself but the address that service sends it from.
+    #[serde(default)]
+    pub source: StockSource,
     /// The build's version, such as OS4.0.4.0.XPACNXM.
     pub version: String,
-    /// Where the package is downloaded from, over HTTPS.
+    /// Where the package is downloaded from, over HTTPS: the package
+    /// itself, or where the phone maker's update service says it is.
     pub package: String,
     /// The recovery partition's SHA-256, in lowercase hex.
     pub recovery: String,
+}
+
+/// The update services a stock build's full package is asked of.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StockSource {
+    /// Xiaomi's update server, whose packages are downloaded from the
+    /// address the configuration names.
+    #[default]
+    Xiaomi,
+    /// OPPO and OnePlus's update service, whose `downloadCheck` address
+    /// answers with where the package is for a while, once asked as the
+    /// phone's own updater asks it.
+    Oplus,
 }
 
 /// What brings the phone's WLAN up inside a recovery, which loads none of
@@ -567,13 +586,24 @@ impl DeviceConfig {
             }
         }
         if let Some(stock) = &cfg.stock {
-            let name = stock.package.rsplit('/').next().unwrap_or_default();
-            ensure!(
-                stock.package.starts_with("https://") && name.ends_with(".zip") && name.contains(&stock.version) && !stock.version.is_empty(),
-                "[stock] package: {} is not an HTTPS address of the full package of {}",
-                stock.package,
-                stock.version
-            );
+            ensure!(!stock.version.is_empty(), "[stock] version: the build has no version");
+            ensure!(stock.package.starts_with("https://"), "[stock] package: {} is not an HTTPS address", stock.package);
+            match stock.source {
+                StockSource::Xiaomi => {
+                    let name = stock.package.rsplit('/').next().unwrap_or_default();
+                    ensure!(
+                        name.ends_with(".zip") && name.contains(&stock.version),
+                        "[stock] package: {} is not an HTTPS address of the full package of {}",
+                        stock.package,
+                        stock.version
+                    );
+                }
+                StockSource::Oplus => ensure!(
+                    stock.package.contains("/downloadCheck?"),
+                    "[stock] package: {} is not a downloadCheck address of OPPO's update service",
+                    stock.package
+                ),
+            }
             ensure!(
                 stock.recovery.len() == 64 && stock.recovery.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
                 "[stock] recovery: {} is not a SHA-256 in lowercase hex",
@@ -775,6 +805,7 @@ mod tests {
     #[test]
     fn each_phone_names_the_stock_build_its_recovery_is_made_on() {
         for (text, version) in [
+            (include_str!("../../../devices/corvette.toml"), "16.0.5.1301"),
             (include_str!("../../../devices/nezha.toml"), "OS4.0.4.0.XPACNXM"),
             (include_str!("../../../devices/ishtar.toml"), "OS3.0.308.0.WMACNXM"),
             (include_str!("../../../devices/pudding.toml"), "OS4.0.4.0.XPCCNXM"),
@@ -799,8 +830,22 @@ mod tests {
         ] {
             let stock = DeviceConfig::parse(text).unwrap().stock.expect("a stock build to build on");
             assert_eq!(stock.version, version);
-            assert!(stock.package.ends_with(".zip") && stock.package.contains(&format!("/{version}/")), "{}", stock.package);
+            match stock.source {
+                StockSource::Xiaomi => assert!(stock.package.ends_with(".zip") && stock.package.contains(&format!("/{version}/")), "{}", stock.package),
+                StockSource::Oplus => assert!(stock.package.contains("/downloadCheck?"), "{}", stock.package),
+            }
         }
+    }
+
+    #[test]
+    fn a_coloros_package_is_asked_of_the_update_service_that_sends_it() {
+        let base = "[device]\ncodename = \"x\"\n[stock]\nsource = \"oplus\"\nversion = \"16.0.5.1301\"\nrecovery = \"faa425b10231a0cfe2d74ff34f344f032ee2d891ea5e9420bf4e67cd86d622a7\"\n";
+        let package = "https://component-ota-cn.allawntech.com/downloadCheck?c=1&p=2&s=3";
+        assert!(DeviceConfig::parse(&format!("{base}package = \"{package}\"\n")).is_ok());
+        for bad in ["https://component-ota-cn.allawntech.com/update/v5", "http://component-ota-cn.allawntech.com/downloadCheck?c=1"] {
+            assert!(DeviceConfig::parse(&format!("{base}package = \"{bad}\"\n")).is_err(), "{bad} is refused");
+        }
+        assert!(DeviceConfig::parse(&format!("{}package = \"{package}\"\n", base.replace("source = \"oplus\"\n", ""))).is_err(), "Xiaomi's server does not answer with the package's address");
     }
 
     #[test]
@@ -885,6 +930,31 @@ mod tests {
             let text = format!("[device]\ncodename = \"x\"\n[wipe]\nlogs = [\"{bad}\"]\n");
             assert!(DeviceConfig::parse(&text).is_err(), "{bad} is refused");
         }
+    }
+
+    #[test]
+    fn parses_corvette() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/corvette.toml")).unwrap();
+        assert_eq!(cfg.device.codename, "corvette");
+        assert_eq!(cfg.device.brand, "OnePlus");
+        assert_eq!(cfg.device.os_version_prop, "ro.build.display.id");
+        assert_eq!((cfg.display.width, cfg.display.height, cfg.display.density), (1264, 2780, 560));
+        assert_eq!((cfg.display.diagonal, cfg.display.corner_radius), (Some(6.78), 114));
+        assert_eq!(cfg.modules.load, ["oplus_bsp_synaptics_tcm2", "qcom-hv-haptics", "icnss2"]);
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into() }));
+        assert_eq!(cfg.partitions.mounted, ["persist"]);
+        let wlan = cfg.wlan.expect("the Ace 3 Pro's WLAN is described");
+        assert_eq!(wlan.modules, ["qca_cld3_kiwi_v2"]);
+        assert_eq!(wlan.writes.len(), 2, "the chip is told to boot before wlan0 shows");
+        assert_eq!(wlan.firmware[1].partition.as_deref(), Some("persist"));
+        assert_eq!(wlan.probe, "http://conn1.oppomobile.com/generate_204");
+        let haptics = cfg.haptics.expect("the Ace 3 Pro has a motor");
+        assert_eq!((haptics.click, haptics.resonance.as_str()), (Some(0), "/sys/class/qcom-haptics/lra_frequency_hz"));
+        assert_eq!(cfg.backup.efs, ["modem_st1", "modem_st2", "persist"]);
+        assert!(cfg.backup.data_skipped.contains(&"vendor/secure_element".to_string()));
+        assert!(cfg.wipe.logs.contains(&"/data/persist_log".to_string()));
+        assert_eq!(cfg.stock.expect("a stock build").source, StockSource::Oplus);
+        assert!(cfg.services.is_empty(), "the phone's own programs that use its keys are read from its partitions");
     }
 
     #[test]

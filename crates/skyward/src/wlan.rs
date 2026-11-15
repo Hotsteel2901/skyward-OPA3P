@@ -628,10 +628,21 @@ fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
         for file in &cfg.firmware {
             place(file)?;
         }
+        // A switch the platform driver makes before the WLAN driver asks the
+        // chip to start, such as one that boots the chip's processor, is
+        // written first where it is there already: the platform driver runs
+        // as one of the modules the recovery loaded at bring-up.
+        let mut written: Vec<&str> = Vec::new();
+        for w in &cfg.writes {
+            if Path::new(&w.path).exists() {
+                fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
+                written.push(&w.path);
+            }
+        }
         for path in skyward_modules::load(modules, &cfg.modules)? {
             skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
         }
-        for w in &cfg.writes {
+        for w in cfg.writes.iter().filter(|w| !written.contains(&w.path.as_str())) {
             fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
         }
         let until = Instant::now() + INTERFACE_WAIT;
