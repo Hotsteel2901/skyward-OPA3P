@@ -113,6 +113,9 @@ Skyward 是使用 Rust 编写的 recovery，从零开始编写。
 | 🚧 REDMI K90 Ultra | `warsaw` | OS3.0.309.0.WHPCNXM（Android 16） |
 | 🚧 REDMI K100 Pro | `athens` | OS4.0.4.0.XPICNXM（Android 17） |
 | 🚧 REDMI K100 Pro Max | `songyuan` | OS4.0.4.0.XGNCNXM（Android 17） |
+| 🚧 一加 Ace 3 Pro | `corvette` | PJX110_16.0.5.700(CN01)（Android 16） |
+
+一加 Ace 3 Pro 的配置没有写明原厂系统版本，因为 OPPO 的更新包链接在发布一段时间后就会失效；构建时需要用从手机取出的 recovery 分区镜像，见[构建](#构建)。
 
 ## 安装 Skyward
 
@@ -181,6 +184,14 @@ target/release/skyward-pack recovery \
   --mono-license resources/fonts/KirkMono-OFL.txt \
   --out target/skyward-nezha.img
 ```
+
+配置中没有写明原厂系统版本的机型（例如一加 Ace 3 Pro），需要自己提供 recovery 分区镜像来构建：OPPO 的更新包链接在发布一段时间后就会失效。可以像下面这样从手机中取出 recovery 分区，
+
+```sh
+adb shell su -c 'dd if=/dev/block/by-name/recovery$(getprop ro.boot.slot_suffix) of=/sdcard/recovery.img'
+```
+
+或者用 `payload-dumper-go` 从全量包中解出，然后交给 `--stock`；其余步骤与上面相同。这里要的是整个分区，也就是全量包里那个带 AVB footer 的镜像，而不是某些工具截出来的较小的分区镜像。
 
 测试和代码检查在电脑上运行；只在手机上运行的代码按照手机目标检查：
 

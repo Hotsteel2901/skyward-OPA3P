@@ -122,6 +122,11 @@ not been verified.
 | 🚧 REDMI K90 Ultra | `warsaw` | OS3.0.309.0.WHPCNXM (Android 16) |
 | 🚧 REDMI K100 Pro | `athens` | OS4.0.4.0.XPICNXM (Android 17) |
 | 🚧 REDMI K100 Pro Max | `songyuan` | OS4.0.4.0.XGNCNXM (Android 17) |
+| 🚧 OnePlus Ace 3 Pro | `corvette` | PJX110_16.0.5.700(CN01) (Android 16) |
+
+The Ace 3 Pro's configuration names no stock build, since OPPO hands its
+packages out under links that expire; build it on a recovery image taken off the
+phone, as described under [Building](#building).
 
 ## Installing Skyward
 
@@ -237,6 +242,19 @@ target/release/skyward-pack recovery \
   --mono-license resources/fonts/KirkMono-OFL.txt \
   --out target/skyward-nezha.img
 ```
+
+A configuration that names no stock build, as the OnePlus Ace 3 Pro's does, is
+built on a recovery image supplied by hand: OPPO gives its update packages out
+under links that expire. Take the recovery partition off the phone, with
+
+```sh
+adb shell su -c 'dd if=/dev/block/by-name/recovery$(getprop ro.boot.slot_suffix) of=/sdcard/recovery.img'
+```
+
+or out of a full package with `payload-dumper-go`, and give it to `--stock`;
+everything else is as above. The image is the whole partition: the one the
+package holds, with its AVB footer, not the smaller partition image some tools
+cut out of it.
 
 Tests and lints run on the computer; what runs only on the phone is linted for it:
 

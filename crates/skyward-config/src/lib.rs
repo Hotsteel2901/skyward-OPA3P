@@ -126,6 +126,11 @@ pub struct Wlan {
     /// which the directory takes only from a program the running system
     /// describes.
     pub service: String,
+    /// Whether the driver leaves the radio blocked until its firmware is
+    /// up, as OnePlus's does: the rfkill switches are unblocked once the
+    /// interface has been made.
+    #[serde(default)]
+    pub unblock: bool,
     /// The page the stock system asks over plain HTTP to tell whether a
     /// network reaches the internet, which answers 204 with nothing.
     pub probe: String,
@@ -214,6 +219,11 @@ pub struct Haptics {
     /// The file the driver says the motor's resonant frequency in, in
     /// tenths of a hertz whatever its label.
     pub resonance: String,
+    /// The file the driver says the motor's period in, in microseconds,
+    /// where it leaves the frequency at nothing until the motor is first
+    /// played, as OnePlus's does.
+    #[serde(default)]
+    pub period: Option<String>,
     pub strength: Strength,
 }
 
@@ -271,6 +281,16 @@ pub struct Device {
     /// System property that carries the vendor OS version.
     #[serde(default = "default_os_version_prop")]
     pub os_version_prop: String,
+    /// Whether the port carries file transfer beside adb. Some phones' USB
+    /// setups cannot enumerate it together with adb, and their configuration
+    /// leaves it out.
+    #[serde(default = "default_true")]
+    pub mtp: bool,
+    /// Whether SELinux is put in permissive mode before the phone's own
+    /// programs start, as OnePlus's policy refuses some of them the files
+    /// they need inside a recovery.
+    #[serde(default)]
+    pub permissive: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -541,6 +561,9 @@ impl DeviceConfig {
         if let Some(haptics) = &cfg.haptics {
             let file = &haptics.resonance;
             ensure!(Path::new(file).is_absolute(), "[haptics] resonance: {file} is not an absolute path");
+            if let Some(period) = &haptics.period {
+                ensure!(Path::new(period).is_absolute(), "[haptics] period: {period} is not an absolute path");
+            }
             let Strength { lightest, strongest } = haptics.strength;
             ensure!(
                 0.0 < lightest && lightest < strongest && strongest <= 1.0,
@@ -622,6 +645,8 @@ mod tests {
         assert_eq!(cfg.device.codename, "nezha");
         assert!(cfg.device.ab);
         assert_eq!(cfg.device.os_version_prop, "ro.build.display.id");
+        assert!(cfg.device.mtp, "file transfer is offered unless a phone says its port cannot carry it");
+        assert!(!cfg.device.permissive, "SELinux enforces unless a phone's policy needs it not to");
         assert_eq!(cfg.modules.sources, default_module_sources());
         assert!(cfg.modules.load.is_empty());
         assert_eq!((cfg.firmware, cfg.wlan, cfg.update), (None, None, None), "a phone may have none of them");
@@ -653,6 +678,8 @@ mod tests {
         assert!(with(&format!("click = 0\n{resonance}\n{strength}")).is_ok(), "a click kept");
         assert!(with(&format!("click = 0\n{strength}")).is_err(), "no motor's resonance to make the ticks at");
         assert!(with(&format!("resonance = \"sys/f\"\n{strength}")).is_err(), "a file named from nowhere");
+        assert!(with(&format!("{resonance}\n{strength}\nperiod = \"t/lra\"")).is_err(), "a period named from nowhere");
+        assert!(with(&format!("{resonance}\n{strength}\nperiod = \"/sys/t_lra_us\"")).is_ok(), "a period to fall back on");
         assert!(with(resonance).is_err(), "a click without its strengths");
         for (lightest, strongest) in [(0.0, 0.5), (0.5, 0.5), (0.5, 0.25), (0.25, 1.5)] {
             let s = format!("{resonance}\nstrength = {{ lightest = {lightest:?}, strongest = {strongest:?} }}");
@@ -947,5 +974,22 @@ mod tests {
         assert!(!report.uses(Path::new("/vendor")));
         let nezha = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         assert!(nezha.services[0].uses(Path::new("/vendor")), "its shell and its libraries are the vendor partition's");
+    }
+
+    #[test]
+    fn parses_corvette() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/corvette.toml")).unwrap();
+        assert_eq!(cfg.device.codename, "corvette");
+        assert_eq!((cfg.display.width, cfg.display.height, cfg.display.density), (1264, 2780, 560));
+        assert!(!cfg.device.mtp, "the port cannot carry file transfer beside adb");
+        assert!(cfg.device.permissive, "its policy refuses the loop worker while enforcing");
+        assert!(cfg.modules.load.iter().any(|m| m == "oplus_bsp_tp_hbp_syna_s3910"), "its touchscreen is Synaptics' behind HBP");
+        let wlan = cfg.wlan.expect("the Ace 3 Pro's WLAN is described");
+        assert_eq!(wlan.modules, ["rfkill", "qca_cld3_kiwi_v2"]);
+        assert!(wlan.unblock, "OnePlus's driver leaves the radio blocked until its firmware is up");
+        assert_eq!(wlan.firmware[0].path, "/odm/vendor/etc/wifi/WCNSS_qcom_cfg.ini", "the board's settings are on odm");
+        let haptics = cfg.haptics.expect("the Ace 3 Pro has a motor");
+        assert_eq!(haptics.period.as_deref(), Some("/sys/class/qcom-haptics/t_lra_us"), "the frequency reads nothing until the motor is played");
+        assert_eq!(cfg.stock, None, "its package is given out under a link that expires, so the image is built on one supplied by hand");
     }
 }

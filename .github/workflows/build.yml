@@ -97,11 +97,13 @@ jobs:
         env:
           DEVICE: ${{ inputs.device }}
         run: |
+          # A configuration that names no stock build is built on a recovery
+          # image only its owner can supply, so it is left out of the matrix.
           if [ -n "$DEVICE" ]; then
             test -f "devices/$DEVICE.toml"
             echo "devices=$(jq -nc --arg device "$DEVICE" '[$device]')" >> "$GITHUB_OUTPUT"
           else
-            echo "devices=$(basename -s .toml devices/*.toml | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+            echo "devices=$(python3 -c 'import glob,json,tomllib; print(json.dumps(sorted(p.rsplit("/", 1)[-1][:-5] for p in glob.glob("devices/*.toml") if "stock" in tomllib.load(open(p, "rb")))))')" >> "$GITHUB_OUTPUT"
           fi
 
   recovery:
@@ -197,6 +199,8 @@ jobs:
         run: |
           zips=()
           for config in devices/*.toml; do
+            # A configuration that names no stock build has no zip to hand out.
+            grep -q '^\[stock\]' "$config" || continue
             device=$(basename "$config" .toml)
             model=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["device"]["model"])' "$config")
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
